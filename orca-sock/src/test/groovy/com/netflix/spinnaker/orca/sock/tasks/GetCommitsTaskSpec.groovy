@@ -59,7 +59,7 @@ class GetCommitsTaskSpec extends Specification {
 
   def "global credential is preferred to the stage account for application lookup"() {
     given:
-    def stage = new PipelineStage(pipeline, "stash", [application: app, account: account])//, "kato.tasks" : katoMap])
+    def stage = new PipelineStage(pipeline, "stash", [application: app, account: account])
     task.sockService = sockService
     task.front50Service = front50Service
 
@@ -118,20 +118,22 @@ class GetCommitsTaskSpec extends Specification {
 
     then:
     result.status == taskStatus
-    result.outputs.commits.size == 2
-    result.outputs.commits[0].displayId == "abcdab"
-    result.outputs.commits[0].id == "abcdabcdabcdabcd"
-    result.outputs.commits[0].authorDisplayName == "Joe Coder"
-    result.outputs.commits[0].timestamp == 1432081865000
-    result.outputs.commits[0].commitUrl == "http://stash.com/abcdabcdabcdabcd"
-    result.outputs.commits[0].message == "my commit"
 
-    result.outputs.commits[1].displayId == "efghefgh"
-    result.outputs.commits[1].id == "efghefghefghefghefgh"
-    result.outputs.commits[1].authorDisplayName == "Jane Coder"
-    result.outputs.commits[1].timestamp == 1432081256000
-    result.outputs.commits[1].commitUrl == "http://stash.com/efghefghefghefghefgh"
-    result.outputs.commits[1].message == "bug fix"
+    List commitsList = result.outputs.commits.get(region)
+    commitsList.size() == 2
+    commitsList[0].displayId == "abcdab"
+    commitsList[0].id == "abcdabcdabcdabcd"
+    commitsList[0].authorDisplayName == "Joe Coder"
+    commitsList[0].timestamp == 1432081865000
+    commitsList[0].commitUrl == "http://stash.com/abcdabcdabcdabcd"
+    commitsList[0].message == "my commit"
+
+    commitsList[1].displayId == "efghefgh"
+    commitsList[1].id == "efghefghefghefghefgh"
+    commitsList[1].authorDisplayName == "Jane Coder"
+    commitsList[1].timestamp == 1432081256000
+    commitsList[1].commitUrl == "http://stash.com/efghefghefghefghefgh"
+    commitsList[1].message == "bug fix"
 
     where:
     app = "myapp"
@@ -148,6 +150,64 @@ class GetCommitsTaskSpec extends Specification {
     "myapp-stack" | "myapp-stack-v002" | "myapp-stack-v003"
     "myapp-stack-detail" | "myapp-stack-detail-v002" | "myapp-stack-detail-v003"
   }
+
+  def "get commits from a canary context"() {
+    given:
+    def stage = new PipelineStage(pipeline, "stash", [application: app, account: account,
+                                                      ("kato.tasks") : [[resultObjects : [[region : "us-east-1"]]]],
+                                                      canary : [canaryDeployments : [ baselineCluster : [ imageId : sourceImage, region : "us-east-1"], canaryCluster : [ imageId : targetImage, region : "us-east-1"]]]]).asImmutable()
+
+    and:
+    task.sockService = Stub(SockService) {
+      compareCommits("stash", "projectKey", "repositorySlug", ['to':'186605b', 'from':'a86305d', 'limit':100]) >> [[message: "my commit", displayId: "abcdab", id: "abcdabcdabcdabcd", authorDisplayName: "Joe Coder", timestamp: 1432081865000, commitUrl: "http://stash.com/abcdabcdabcdabcd"],
+                                                                                                                   [message: "bug fix", displayId: "efghefgh", id: "efghefghefghefghefgh", authorDisplayName: "Jane Coder", timestamp: 1432081256000, commitUrl: "http://stash.com/efghefghefghefghefgh"]]
+    }
+
+    and:
+    task.front50Service = front50Service
+    1 * front50Service.get(account, app) >> new Application(repoSlug: "repositorySlug", repoProjectKey: "projectKey", repoType: "stash")
+
+    and:
+    task.objectMapper = new ObjectMapper()
+    def oortResponse = "{\"launchConfig\" : {\"imageId\" : \"${sourceImage}\"}}".stripIndent()
+    Response response = new Response('http://oort', 200, 'OK', [], new TypedString(oortResponse))
+    Response sourceResponse = new Response('http://oort', 200, 'OK', [], new TypedString('[{ "tags" : { "appversion" : "myapp-1.143-h216.186605b/MYAPP-package-myapp/216" }}]'))
+    Response targetResponse = new Response('http://oort', 200, 'OK', [], new TypedString('[{ "tags" : { "appversion" : "myapp-1.144-h217.a86305d/MYAPP-package-myapp/217" }}]'))
+    task.oortService = oortService
+    1 * oortService.getByAmiId("aws", account, region, sourceImage) >> sourceResponse
+    1 * oortService.getByAmiId("aws", account, region, targetImage) >> targetResponse
+
+    when:
+    def result = task.execute(stage)
+
+    then:
+    result.status == taskStatus
+    List commitsList = result.outputs.commits.get(region)
+    commitsList.size() == 2
+    commitsList[0].displayId == "abcdab"
+    commitsList[0].id == "abcdabcdabcdabcd"
+    commitsList[0].authorDisplayName == "Joe Coder"
+    commitsList[0].timestamp == 1432081865000
+    commitsList[0].commitUrl == "http://stash.com/abcdabcdabcdabcd"
+    commitsList[0].message == "my commit"
+
+    commitsList[1].displayId == "efghefgh"
+    commitsList[1].id == "efghefghefghefghefgh"
+    commitsList[1].authorDisplayName == "Jane Coder"
+    commitsList[1].timestamp == 1432081256000
+    commitsList[1].commitUrl == "http://stash.com/efghefghefghefghefgh"
+    commitsList[1].message == "bug fix"
+
+    where:
+    app = "myapp"
+    account = "test"
+    region = "us-east-1"
+    sourceImage = "ami-source"
+    targetImage = "ami-target"
+    jobState = 'SUCCESS'
+    taskStatus = ExecutionStatus.SUCCEEDED
+  }
+
 
   def "returns running where there is an error talking to sock"() {
     given:
@@ -226,7 +286,57 @@ class GetCommitsTaskSpec extends Specification {
     targetImage = "ami-target"
   }
 
-  def "returns success if commit info is missing"() {
+  def "returns success if ami tags are missing"() {
+    given:
+    String katoTasks = "[{\"resultObjects\": [" +
+      "{\"ancestorServerGroupNameByRegion\": { \"${region}\":\"${serverGroup}\"}}," +
+      "{\"messages\" : [ ], \"serverGroupNameByRegion\": {\"${region}\": \"${targetServerGroup}\"},\"serverGroupNames\": [\"${region}:${targetServerGroup}\"]}],\"status\": {\"completed\": true,\"failed\": false}}]"
+    ObjectMapper mapper = new ObjectMapper()
+    def katoMap = mapper.readValue(katoTasks, List)
+    def stage = new PipelineStage(pipeline, "stash", [application: app, account: account,
+                                                      source     : [asgName: serverGroup, region: region, account: account], "deploy.server.groups": ["us-west-1": [targetServerGroup]], deploymentDetails: [[ami: "ami-foo", region: "us-east-1"], [ami: targetImage, region: region]], "kato.tasks" : katoMap]).asImmutable()
+
+    and:
+    task.sockService = Stub(SockService) {
+      0 * compareCommits("stash", "projectKey", "repositorySlug", ['to':'186605b', 'from':'a86305d', 'limit':100])
+    }
+
+    and:
+    task.front50Service = front50Service
+    1 * front50Service.get(account, app) >> new Application(repoSlug: "repositorySlug", repoProjectKey: "projectKey", repoType: "stash")
+
+    and:
+    task.objectMapper = new ObjectMapper()
+    def oortResponse = "{\"launchConfig\" : {\"imageId\" : \"${sourceImage}\"}}".stripIndent()
+    Response response = new Response('http://oort', 200, 'OK', [], new TypedString(oortResponse))
+    Response sourceResponse = new Response('http://oort', 200, 'OK', [], new TypedString(sourceTags))
+    Response targetResponse = new Response('http://oort', 200, 'OK', [], new TypedString(targetTags))
+    task.oortService = oortService
+    1 * oortService.getServerGroup(app, account, cluster, serverGroup, region, "aws") >> response
+    oortService.getByAmiId("aws", account, region, sourceImage) >> sourceResponse
+    oortService.getByAmiId("aws", account, region, targetImage) >> targetResponse
+
+    when:
+    def result = task.execute(stage)
+
+    then:
+    result.status == taskStatus
+
+    where:
+    app = "myapp"
+    account = "test"
+    region = "us-west-1"
+    sourceImage = "ami-source"
+    targetImage = "ami-target"
+    jobState = 'SUCCESS'
+    taskStatus = ExecutionStatus.SUCCEEDED
+
+    cluster | serverGroup | targetServerGroup | sourceTags | targetTags
+    "myapp" | "myapp-v001" | "myapp-v002" | '[{ "tags" : { "appversion" : "myapp-1.143-h216.186605b/MYAPP-package-myapp/216" }}]' | '[{ "tags" : { }}]'
+    "myapp" | "myapp-v001" | "myapp-v002" | '[{ "tags" : { }}]' | '[{ "tags" : { "appversion" : "myapp-1.143-h216.186605b/MYAPP-package-myapp/216" }}]'
+  }
+
+  def "return success if we cant determine source/target commits"() {
     given:
     String katoTasks = "[{\"resultObjects\": [" +
       "{\"ancestorServerGroupNameByRegion\": { \"${region}\":\"${serverGroup}\"}}," +

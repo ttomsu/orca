@@ -72,60 +72,66 @@ class GetCommitsTask implements RetryableTask {
     String toCommit
     String fromCommit
 
-    String ancestorAsg = stage.context.get("kato.tasks")?.find { item ->
-      item.find { key, value ->
-        key == 'resultObjects'
-      }
-    }?.resultObjects?.ancestorServerGroupNameByRegion?.find {
-      it.find { key, value ->
-        key == region
-      }
-    }?.get(region)
+    String ancestorAmi
+    String targetAmi
+    def targetRegion
 
-    if (projectKey && repositorySlug && repoType && ancestorAsg && region && account) {
+    TypeReference<List> jsonListType = new TypeReference<List>() {}
+    TypeReference<Map> jsonMapType = new TypeReference<Map>() {}
 
+    // figure out if we are diff'ing two asgs in the same/separate cluster
+    if(stage.context.canary?.canaryDeployments) { // separate cluster diff
+      targetRegion = stage.context."kato.tasks"[0].resultObjects[0].region
+      ancestorAmi = stage.context.canary.canaryDeployments?.baselineCluster?.imageId
+      targetAmi = stage.context.canary.canaryDeployments?.canaryCluster?.imageId
+
+    } else if (stage.context.get("kato.tasks")) { // assume same cluster asg diff
+      String ancestorAsg = stage.context.get("kato.tasks")?.find { item ->
+        item.find { key, value ->
+          key == 'resultObjects'
+        }
+      }?.resultObjects?.ancestorServerGroupNameByRegion?.find {
+        it.find { key, value ->
+          key == region
+        }
+      }?.get(region)
+      String sourceCluster
+      if (ancestorAsg.lastIndexOf("-") > 0) {
+        sourceCluster = ancestorAsg.substring(0, ancestorAsg.lastIndexOf("-"))
+      } else {
+        sourceCluster = ancestorAsg
+      }
+      Map sourceServerGroup = objectMapper.readValue(oortService.getServerGroup(stage.context.application,
+        account, sourceCluster,
+        ancestorAsg, region, "aws").body.in(), jsonMapType)
+
+      stage.context."deploy.server.groups".each {
+        targetRegion = it.key
+      }
+
+      // deploy task sets this one
+      targetAmi = stage.context.deploymentDetails.find { it.region == targetRegion }?.ami
+
+      // copyLastAsg sets this one
+      if (!targetAmi) {
+        targetAmi = stage.context.amiName
+      }
+      ancestorAmi = sourceServerGroup.launchConfig.imageId
+    }
+
+    if (projectKey && repositorySlug && repoType && targetRegion && account && ancestorAmi && targetAmi) {
       try {
 
-        TypeReference<List> jsonListType = new TypeReference<List>() {}
-        TypeReference<Map> jsonMapType = new TypeReference<Map>() {}
 
-        String sourceCluster
-        if (ancestorAsg.lastIndexOf("-") > 0) {
-          sourceCluster = ancestorAsg.substring(0, ancestorAsg.lastIndexOf("-"))
-        } else {
-          sourceCluster = ancestorAsg
-        }
 
-        Map sourceServerGroup = objectMapper.readValue(oortService.getServerGroup(stage.context.application,
-          account, sourceCluster,
-          ancestorAsg, region, "aws").body.in(), jsonMapType)
-
-        String sourceAmi = sourceServerGroup.launchConfig.imageId
         def sourceAmiDetails = objectMapper.readValue(oortService.getByAmiId("aws", account,
-          region, sourceAmi).body.in(), jsonListType)
+          targetRegion, ancestorAmi).body.in(), jsonListType)
 
         String sourceAppVersion = sourceAmiDetails[0]?.tags?.appversion
         if(sourceAppVersion) {
           toCommit = sourceAppVersion.substring(0, sourceAppVersion.indexOf('/')).substring(sourceAppVersion.lastIndexOf('.') + 1)
         } else {
           return new DefaultTaskResult(ExecutionStatus.SUCCEEDED)
-        }
-
-        def targetRegion
-        stage.context."deploy.server.groups".each {
-          targetRegion = it.key
-        }
-
-        // deploy task sets this one
-        String targetAmi = stage.context.deploymentDetails.find { it.region == targetRegion }?.ami
-
-        // copyLastAsg sets this one
-        if (!targetAmi) {
-          targetAmi = stage.context.amiName
-        }
-
-        if (!targetAmi) {
-          throw new RuntimeException("could not determine the target ami")
         }
 
         def targetAmiDetails = objectMapper.readValue(oortService.getByAmiId("aws", account,
@@ -138,14 +144,19 @@ class GetCommitsTask implements RetryableTask {
           return new DefaultTaskResult(ExecutionStatus.SUCCEEDED)
         }
 
-        List commits = sockService.compareCommits(repoType, projectKey, repositorySlug, [to: toCommit, from: fromCommit, limit: 100])
-        def commitsList = []
-        commits.each {
-          // add commits to the task output
-          commitsList << [displayId: it.displayId, id: it.id, authorDisplayName: it.authorDisplayName,
-                          timestamp: it.timestamp, commitUrl: it.commitUrl, message: it.message]
+        if(toCommit && fromCommit) {
+          List commits = sockService.compareCommits(repoType, projectKey, repositorySlug, [to: toCommit, from: fromCommit, limit: 100])
+          def commitsList = []
+          commits.each {
+            // add commits to the task output
+            commitsList << [displayId: it.displayId, id: it.id, authorDisplayName: it.authorDisplayName,
+                            timestamp: it.timestamp, commitUrl: it.commitUrl, message: it.message]
+          }
+          return new DefaultTaskResult(ExecutionStatus.SUCCEEDED, [commits: [(targetRegion): commitsList]])
+        } else {
+          // dont fail if we cant determine source and target commits
+          return new DefaultTaskResult(ExecutionStatus.SUCCEEDED, [commits: [(targetRegion): []]])
         }
-        return new DefaultTaskResult(ExecutionStatus.SUCCEEDED, [commits: commitsList])
       } catch (RetrofitError e) {
         if ([503, 500, 404].contains(e.response?.status)) {
           log.warn("Http ${e.response.status} received from `sock` (${repoType}, ${projectKey}, ${repositorySlug}, ${toCommit}, ${fromCommit}) , retrying...")
