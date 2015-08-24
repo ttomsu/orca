@@ -16,7 +16,9 @@
 
 package com.netflix.spinnaker.orca.pipeline.persistence
 
+import com.netflix.spinnaker.orca.ExecutionStatus
 import com.netflix.spinnaker.orca.pipeline.model.*
+import rx.Observable
 
 interface ExecutionRepository {
   void store(Orchestration orchestration)
@@ -28,10 +30,17 @@ interface ExecutionRepository {
 
   Pipeline retrievePipeline(String id)
   void deletePipeline(String id)
-  rx.Observable<Pipeline> retrievePipelines()
-  rx.Observable<Pipeline> retrievePipelinesForApplication(String application)
+
+  Observable<Pipeline> retrievePipelines()
+
+  Observable<Pipeline> retrievePipelinesForApplication(String application)
+
+  Observable<Pipeline> queryPipelines(String application, Set<ExecutionStatus> filter, Optional<Integer> maxPerType)
+
   Orchestration retrieveOrchestration(String id)
   void deleteOrchestration(String id)
-  rx.Observable<Orchestration> retrieveOrchestrations()
-  rx.Observable<Orchestration> retrieveOrchestrationsForApplication(String application)
+
+  Observable<Orchestration> retrieveOrchestrations()
+
+  Observable<Orchestration> retrieveOrchestrationsForApplication(String application)
 }

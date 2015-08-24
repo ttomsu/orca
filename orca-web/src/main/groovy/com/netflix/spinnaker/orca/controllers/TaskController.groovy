@@ -17,6 +17,7 @@
 package com.netflix.spinnaker.orca.controllers
 
 import java.time.Clock
+import com.netflix.spinnaker.orca.ExecutionStatus
 import com.netflix.spinnaker.orca.model.OrchestrationViewModel
 import com.netflix.spinnaker.orca.pipeline.PipelineStartTracker
 import com.netflix.spinnaker.orca.pipeline.model.Orchestration
@@ -50,9 +51,10 @@ class TaskController {
   List<Orchestration> list(@PathVariable String application) {
     def startTimeCutoff = (new Date(clock.millis()) - daysOfExecutionHistory).time
     executionRepository.retrieveOrchestrationsForApplication(application)
-      .filter({ Orchestration orchestration -> !orchestration.startTime || (orchestration.startTime > startTimeCutoff) })
-      .map({ Orchestration orchestration -> convert(orchestration) })
-      .subscribeOn(Schedulers.io()).toList().toBlocking().single().sort(startTimeOrId)
+                       .filter(
+      { Orchestration orchestration -> !orchestration.startTime || (orchestration.startTime > startTimeCutoff) })
+                       .map({ Orchestration orchestration -> convert(orchestration) })
+                       .subscribeOn(Schedulers.io()).toList().toBlocking().single().sort(startTimeOrId)
   }
 
   @RequestMapping(value = "/tasks", method = RequestMethod.GET)
@@ -123,9 +125,16 @@ class TaskController {
   }
 
   @RequestMapping(value = "/applications/{application}/pipelines", method = RequestMethod.GET)
-  List<Pipeline> getApplicationPipelines(@PathVariable String application) {
-    def pipelines = executionRepository.retrievePipelinesForApplication(application)
-      .subscribeOn(Schedulers.io()).toList().toBlocking().single()
+  List<Pipeline> getApplicationPipelines(
+    @PathVariable String application,
+    @RequestParam(required = false, defaultValue = "") Set<ExecutionStatus> filter,
+    @RequestParam(required = false) Integer max) {
+    def pipelines = executionRepository
+      .queryPipelines(application, filter, Optional.ofNullable(max))
+      .subscribeOn(Schedulers.io())
+      .toList()
+      .toBlocking()
+      .single()
 
     def cutoffTime = (new Date(clock.millis()) - daysOfExecutionHistory).time
 

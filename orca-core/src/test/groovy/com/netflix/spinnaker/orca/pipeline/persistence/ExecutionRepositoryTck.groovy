@@ -16,6 +16,7 @@
 
 package com.netflix.spinnaker.orca.pipeline.persistence
 
+import java.time.Clock
 import com.netflix.spinnaker.kork.jedis.EmbeddedRedis
 import com.netflix.spinnaker.orca.pipeline.model.Orchestration
 import com.netflix.spinnaker.orca.pipeline.model.Pipeline
@@ -38,6 +39,9 @@ abstract class ExecutionRepositoryTck<T extends ExecutionRepository> extends Spe
   abstract T createExecutionRepository()
 
   def "if an execution does not have an id it is assigned one when stored"() {
+    given:
+    execution.buildTime = buildTime
+
     expect:
     execution.id == null
 
@@ -49,10 +53,13 @@ abstract class ExecutionRepositoryTck<T extends ExecutionRepository> extends Spe
 
     where:
     execution << [new Pipeline(), new Orchestration()]
-
+    buildTime = Clock.systemUTC().millis()
   }
 
   def "if an execution already has an id it is not re-assigned when stored"() {
+    given:
+    execution.id = "a-preassigned-id"
+
     when:
     repository.store(execution)
 
@@ -60,7 +67,10 @@ abstract class ExecutionRepositoryTck<T extends ExecutionRepository> extends Spe
     execution.id == old(execution.id)
 
     where:
-    execution << [new Pipeline(id: "a-preassigned-id"), new Orchestration(id: "a-preassigned-id")]
+    execution << [
+      new Pipeline.Builder().build(),
+      new Orchestration()
+    ]
   }
 
   def "a pipeline can be retrieved after being stored"() {
@@ -197,7 +207,7 @@ class JedisExecutionRepositorySpec extends ExecutionRepositoryTck<JedisExecution
 
   def "cleans up indexes of non-existent executions"() {
     given:
-    jedis.sadd("allJobs:pipeline", id)
+    jedis.zadd("allJobs:pipeline", Clock.systemUTC().millis(), id)
 
     when:
     def result = repository.retrievePipelines().toList().toBlocking().first()
@@ -206,9 +216,10 @@ class JedisExecutionRepositorySpec extends ExecutionRepositoryTck<JedisExecution
     result.isEmpty()
 
     and:
-    !jedis.sismember("allJobs:pipeline", id)
+    jedis.zrank("allJobs:pipeline", id) == null
 
     where:
     id = "some-pipeline-id"
   }
+
 }

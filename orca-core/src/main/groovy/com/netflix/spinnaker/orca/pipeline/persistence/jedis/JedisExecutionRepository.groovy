@@ -1,7 +1,11 @@
 package com.netflix.spinnaker.orca.pipeline.persistence.jedis
 
+import java.time.Clock
+import java.time.Duration
+import java.time.temporal.TemporalAmount
 import java.util.function.Function
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.netflix.spinnaker.orca.ExecutionStatus
 import com.netflix.spinnaker.orca.jackson.OrcaObjectMapper
 import com.netflix.spinnaker.orca.pipeline.model.*
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionNotFoundException
@@ -17,8 +21,11 @@ import redis.clients.jedis.JedisCommands
 import redis.clients.util.Pool
 import rx.Observable
 import rx.Scheduler
+import rx.functions.Func1
 import rx.schedulers.Schedulers
+import static com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
 import static java.util.concurrent.Executors.newFixedThreadPool
+import static rx.Observable.*
 
 @Component
 @Slf4j
@@ -68,6 +75,14 @@ class JedisExecutionRepository implements ExecutionRepository {
   void store(Pipeline pipeline) {
     withJedis { Jedis jedis ->
       storeExecutionInternal(jedis, pipeline)
+      jedis.sadd("pipelineConfigs:$pipeline.application",
+                 pipeline.pipelineConfigId ?: "") // TODO: this elvis is bullshit for tests, remove it!
+      jedis.zadd("pipeline:executions:$pipeline.pipelineConfigId", pipeline.buildTime, pipeline.id)
+      if (pipeline.status == RUNNING) {
+        jedis.sadd("pipelines:$pipeline.application:running", pipeline.id)
+      } else {
+        jedis.srem("pipelines:$pipeline.application:running", pipeline.id)
+      }
     }
   }
 
@@ -119,6 +134,63 @@ class JedisExecutionRepository implements ExecutionRepository {
   }
 
   @Override
+  Observable<Pipeline> queryPipelines(String application, Set<ExecutionStatus> filter, Optional<Integer> maxPerType) {
+    just("pipelineConfigs:$application".toString())
+      .flatMap({ String key ->
+      def pipelineConfigIds = withJedis { Jedis jedis ->
+        jedis.smembers(key)
+      }
+      def pipelineStreams = pipelineConfigIds.collect {
+        queryPipelinesByConfigId(it, filter, maxPerType)
+      }
+      def runningPipelinesStream = allRunningPipelinesFor(application)
+      def stream = merge(pipelineStreams)
+      merge(stream, runningPipelinesStream).distinct { Pipeline pipeline ->
+        pipeline.id
+      }
+               } as Func1<String, Observable<Pipeline>>)
+  }
+
+  private Observable<Pipeline> queryPipelinesByConfigId(String pipelineConfigId, Set<ExecutionStatus> filter, Optional<Integer> max) {
+    def executionIds = withJedis { Jedis jedis ->
+      jedis.zrevrange("pipeline:executions:$pipelineConfigId", 0, Long.MAX_VALUE)
+    }
+    def stream = from(executionIds)
+      .flatMap({ String executionId ->
+      withJedis { Jedis jedis ->
+        try {
+          just(retrieveInternal(jedis, Pipeline, executionId))
+        } catch (ExecutionNotFoundException e) {
+          empty()
+        }
+      }
+               } as Func1<String, Observable<Pipeline>>)
+      .filter({ Pipeline pipeline ->
+      filter.isEmpty() || pipeline.status in filter
+              } as Func1<Pipeline, Boolean>)
+
+    return max.isPresent() ? stream.take(max.get()) : stream
+  }
+
+  private Observable<Pipeline> allRunningPipelinesFor(String application) {
+    just(application)
+      .flatMapIterable({
+      withJedis { Jedis jedis ->
+        jedis.smembers("pipelines:$application:running")
+      }
+    })
+      .flatMap({ String executionId ->
+      withJedis { Jedis jedis ->
+        try {
+          just(retrieveInternal(jedis, Pipeline, executionId))
+        } catch (ExecutionNotFoundException e) {
+          empty()
+        }
+      }
+               } as Func1<String, Observable<Pipeline>>)
+  }
+
+  @Override
   Orchestration retrieveOrchestration(String id) {
     withJedis { Jedis jedis ->
       retrieveInternal(jedis, Orchestration, id)
@@ -147,9 +219,8 @@ class JedisExecutionRepository implements ExecutionRepository {
 
     if (!execution.id) {
       execution.id = UUID.randomUUID().toString()
-      jedis.sadd(alljobsKey(execution.getClass()), execution.id)
-      def appKey = appKey(execution.getClass(), execution.application)
-      jedis.sadd(appKey, execution.id)
+      jedis.zadd(alljobsKey(execution.getClass()), execution.buildTime, execution.id)
+      jedis.zadd(appKey(execution.getClass(), execution.application), execution.buildTime, execution.id)
     }
     def json = mapper.writeValueAsString(execution)
 
@@ -221,8 +292,7 @@ class JedisExecutionRepository implements ExecutionRepository {
     def key = "${type.simpleName.toLowerCase()}:$id"
     try {
       T item = retrieveInternal(jedis, type, id)
-      def appKey = appKey(type, item.application)
-      jedis.srem(appKey, id)
+      jedis.zrem(appKey(type, item.application), id)
 
       item.stages.each { Stage stage ->
         def stageKey = "${type.simpleName.toLowerCase()}:stage:${stage.id}"
@@ -232,7 +302,7 @@ class JedisExecutionRepository implements ExecutionRepository {
       // do nothing
     } finally {
       jedis.hdel(key, "config")
-      jedis.srem(alljobsKey(type), id)
+      jedis.zrem(alljobsKey(type), id)
     }
   }
 
@@ -244,26 +314,28 @@ class JedisExecutionRepository implements ExecutionRepository {
     retrieveObservable(type, appKey(type, application), queryByAppScheduler)
   }
 
-  @CompileDynamic
-  private <T extends Execution> Observable<T> retrieveObservable(Class<T> type, String lookupKey, Scheduler scheduler) {
-    Observable
-      .just(lookupKey)
-      .flatMapIterable { String key -> withJedis { Jedis jedis -> jedis.smembers(lookupKey) } }
+  private <T extends Execution> Observable<T> retrieveObservable(Class<T> type, String lookupKey, Scheduler scheduler, TemporalAmount maxAge = Duration.ofDays(
+    14)) {
+    just(lookupKey)
+      .flatMapIterable({ String key ->
+      withJedis { Jedis jedis ->
+        jedis.zrangeByScore(lookupKey, Clock.systemUTC().instant().minus(maxAge).toEpochMilli(), Long.MAX_VALUE)
+      }
+                       } as Func1<String, Set<String>>)
       .buffer(chunkSize)
       .flatMap { Collection<String> ids ->
-      Observable
-        .from(ids)
+      from(ids)
         .flatMap { String executionId ->
         withJedis { Jedis jedis ->
           try {
-            return Observable.just(retrieveInternal(jedis, type, executionId))
+            return just(retrieveInternal(jedis, type, executionId))
           } catch (ExecutionNotFoundException ignored) {
             log.info("Execution (${executionId}) does not exist")
-            jedis.srem(lookupKey, executionId)
+            jedis.zrem(lookupKey, executionId)
           } catch (Exception e) {
             log.error("Failed to retrieve execution '${executionId}', message: ${e.message}", e)
           }
-          return Observable.empty()
+          return empty()
         }
       }
         .subscribeOn(scheduler)

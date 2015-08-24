@@ -206,7 +206,7 @@ class TaskControllerSpec extends Specification {
     List results = new ObjectMapper().readValue(response.contentAsString, List)
 
     then:
-    1 * executionRepository.retrievePipelinesForApplication(app) >> rx.Observable.from(pipelines.collect {
+    1 * executionRepository.queryPipelines(*_) >> rx.Observable.from(pipelines.collect {
       def pipelineStage = new PipelineStage(new Pipeline(), "")
       pipelineStage.startTime = it.startTime
       new Pipeline(id: it.id, stages: it.startTime ? [pipelineStage] : [], pipelineConfigId: it.pipelineConfigId)

@@ -83,7 +83,9 @@ class Pipeline extends Execution<Pipeline> {
     }
 
     Pipeline build() {
-      pipeline.buildTime = System.currentTimeMillis()
+      if (!pipeline.buildTime) {
+        pipeline.buildTime = System.currentTimeMillis()
+      }
       pipeline.authentication = Execution.AuthenticationDetails.build().orElse(new Execution.AuthenticationDetails())
 
       pipeline
@@ -111,6 +113,11 @@ class Pipeline extends Execution<Pipeline> {
 
     Builder withExecutingInstance(InstanceInfo instance) {
       pipeline.executingInstance = instance.id
+      return this
+    }
+
+    Builder withBuildTime(long buildTime) {
+      pipeline.buildTime = buildTime
       return this
     }
   }
