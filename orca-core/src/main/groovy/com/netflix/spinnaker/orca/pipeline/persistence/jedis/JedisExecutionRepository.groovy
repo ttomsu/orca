@@ -75,13 +75,12 @@ class JedisExecutionRepository implements ExecutionRepository {
   void store(Pipeline pipeline) {
     withJedis { Jedis jedis ->
       storeExecutionInternal(jedis, pipeline)
-      jedis.sadd("pipelineConfigs:$pipeline.application",
-                 pipeline.pipelineConfigId ?: "") // TODO: this elvis is bullshit for tests, remove it!
-      jedis.zadd("pipeline:executions:$pipeline.pipelineConfigId", pipeline.buildTime, pipeline.id)
+      jedis.sadd(pipelinesByAppKey(pipeline.application), pipeline.pipelineConfigId ?: "")
+      jedis.zadd(executionsByPipelineKey(pipeline.pipelineConfigId), pipeline.buildTime, pipeline.id)
       if (pipeline.status == RUNNING) {
-        jedis.sadd("pipelines:$pipeline.application:running", pipeline.id)
+        jedis.sadd(runningPipelinesKey(pipeline.application), pipeline.id)
       } else {
-        jedis.srem("pipelines:$pipeline.application:running", pipeline.id)
+        jedis.srem(runningPipelinesKey(pipeline.application), pipeline.id)
       }
     }
   }
@@ -135,7 +134,7 @@ class JedisExecutionRepository implements ExecutionRepository {
 
   @Override
   Observable<Pipeline> queryPipelines(String application, Set<ExecutionStatus> filter, Optional<Integer> maxPerType) {
-    just("pipelineConfigs:$application".toString())
+    just(pipelinesByAppKey(application))
       .flatMap({ String key ->
       def pipelineConfigIds = withJedis { Jedis jedis ->
         jedis.smembers(key)
@@ -153,7 +152,7 @@ class JedisExecutionRepository implements ExecutionRepository {
 
   private Observable<Pipeline> queryPipelinesByConfigId(String pipelineConfigId, Set<ExecutionStatus> filter, Optional<Integer> max) {
     def executionIds = withJedis { Jedis jedis ->
-      jedis.zrevrange("pipeline:executions:$pipelineConfigId", 0, Long.MAX_VALUE)
+      jedis.zrevrange(executionsByPipelineKey(pipelineConfigId), 0, Long.MAX_VALUE)
     }
     def stream = from(executionIds)
       .flatMap({ String executionId ->
@@ -176,7 +175,7 @@ class JedisExecutionRepository implements ExecutionRepository {
     just(application)
       .flatMapIterable({
       withJedis { Jedis jedis ->
-        jedis.smembers("pipelines:$application:running")
+        jedis.smembers(runningPipelinesKey(application))
       }
     })
       .flatMap({ String executionId ->
@@ -219,8 +218,8 @@ class JedisExecutionRepository implements ExecutionRepository {
 
     if (!execution.id) {
       execution.id = UUID.randomUUID().toString()
-      jedis.zadd(alljobsKey(execution.getClass()), execution.buildTime, execution.id)
-      jedis.zadd(appKey(execution.getClass(), execution.application), execution.buildTime, execution.id)
+      jedis.zadd(allExecutionsKey(execution.getClass()), execution.buildTime, execution.id)
+      jedis.zadd(executionsByAppKey(execution.getClass(), execution.application), execution.buildTime, execution.id)
     }
     def json = mapper.writeValueAsString(execution)
 
@@ -292,7 +291,7 @@ class JedisExecutionRepository implements ExecutionRepository {
     def key = "${type.simpleName.toLowerCase()}:$id"
     try {
       T item = retrieveInternal(jedis, type, id)
-      jedis.zrem(appKey(type, item.application), id)
+      jedis.zrem(executionsByAppKey(type, item.application), id)
 
       item.stages.each { Stage stage ->
         def stageKey = "${type.simpleName.toLowerCase()}:stage:${stage.id}"
@@ -302,16 +301,16 @@ class JedisExecutionRepository implements ExecutionRepository {
       // do nothing
     } finally {
       jedis.hdel(key, "config")
-      jedis.zrem(alljobsKey(type), id)
+      jedis.zrem(allExecutionsKey(type), id)
     }
   }
 
   private <T extends Execution> Observable<T> all(Class<T> type) {
-    retrieveObservable(type, alljobsKey(type), queryAllScheduler)
+    retrieveObservable(type, allExecutionsKey(type), queryAllScheduler)
   }
 
   private <T extends Execution> Observable<T> allForApplication(Class<T> type, String application) {
-    retrieveObservable(type, appKey(type, application), queryByAppScheduler)
+    retrieveObservable(type, executionsByAppKey(type, application), queryByAppScheduler)
   }
 
   private <T extends Execution> Observable<T> retrieveObservable(Class<T> type, String lookupKey, Scheduler scheduler, TemporalAmount maxAge = Duration.ofDays(
@@ -342,12 +341,24 @@ class JedisExecutionRepository implements ExecutionRepository {
     }
   }
 
-  private String alljobsKey(Class type) {
+  private String allExecutionsKey(Class<? extends Execution> type) {
     "allJobs:${type.simpleName.toLowerCase()}"
   }
 
-  private String appKey(Class type, String app) {
+  private String executionsByAppKey(Class<? extends Execution> type, String app) {
     "${type.simpleName.toLowerCase()}:app:${app}"
+  }
+
+  private String runningPipelinesKey(String application) {
+    "pipelines:$application:running"
+  }
+
+  private String executionsByPipelineKey(String pipelineConfigId) {
+    "pipeline:executions:$pipelineConfigId"
+  }
+
+  private String pipelinesByAppKey(String application) {
+    "pipelineConfigs:$application"
   }
 
   private <T> T withJedis(Function<Jedis, T> action) {
