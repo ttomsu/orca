@@ -207,7 +207,7 @@ class JedisExecutionRepositorySpec extends ExecutionRepositoryTck<JedisExecution
 
   def "cleans up indexes of non-existent executions"() {
     given:
-    jedis.zadd("allJobs:pipeline", Clock.systemUTC().millis(), id)
+    jedis.sadd("allJobs:pipeline", id)
 
     when:
     def result = repository.retrievePipelines().toList().toBlocking().first()
@@ -216,7 +216,7 @@ class JedisExecutionRepositorySpec extends ExecutionRepositoryTck<JedisExecution
     result.isEmpty()
 
     and:
-    jedis.zrank("allJobs:pipeline", id) == null
+    !jedis.smembers("allJobs:pipeline").contains(id)
 
     where:
     id = "some-pipeline-id"

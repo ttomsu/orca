@@ -1,6 +1,5 @@
 package com.netflix.spinnaker.orca.pipeline.persistence.jedis
 
-import java.time.Clock
 import java.time.Duration
 import java.time.temporal.TemporalAmount
 import java.util.function.Function
@@ -218,8 +217,8 @@ class JedisExecutionRepository implements ExecutionRepository {
 
     if (!execution.id) {
       execution.id = UUID.randomUUID().toString()
-      jedis.zadd(allExecutionsKey(execution.getClass()), execution.buildTime, execution.id)
-      jedis.zadd(executionsByAppKey(execution.getClass(), execution.application), execution.buildTime, execution.id)
+      jedis.sadd(allExecutionsKey(execution.getClass()), execution.id)
+      jedis.sadd(executionsByAppKey(execution.getClass(), execution.application), execution.id)
     }
     def json = mapper.writeValueAsString(execution)
 
@@ -291,7 +290,7 @@ class JedisExecutionRepository implements ExecutionRepository {
     def key = "${type.simpleName.toLowerCase()}:$id"
     try {
       T item = retrieveInternal(jedis, type, id)
-      jedis.zrem(executionsByAppKey(type, item.application), id)
+      jedis.srem(executionsByAppKey(type, item.application), id)
 
       item.stages.each { Stage stage ->
         def stageKey = "${type.simpleName.toLowerCase()}:stage:${stage.id}"
@@ -301,7 +300,7 @@ class JedisExecutionRepository implements ExecutionRepository {
       // do nothing
     } finally {
       jedis.hdel(key, "config")
-      jedis.zrem(allExecutionsKey(type), id)
+      jedis.srem(allExecutionsKey(type), id)
     }
   }
 
@@ -318,7 +317,7 @@ class JedisExecutionRepository implements ExecutionRepository {
     just(lookupKey)
       .flatMapIterable({ String key ->
       withJedis { Jedis jedis ->
-        jedis.zrangeByScore(lookupKey, Clock.systemUTC().instant().minus(maxAge).toEpochMilli(), Long.MAX_VALUE)
+        jedis.smembers(lookupKey)
       }
                        } as Func1<String, Set<String>>)
       .buffer(chunkSize)
@@ -330,7 +329,7 @@ class JedisExecutionRepository implements ExecutionRepository {
             return just(retrieveInternal(jedis, type, executionId))
           } catch (ExecutionNotFoundException ignored) {
             log.info("Execution (${executionId}) does not exist")
-            jedis.zrem(lookupKey, executionId)
+            jedis.srem(lookupKey, executionId)
           } catch (Exception e) {
             log.error("Failed to retrieve execution '${executionId}', message: ${e.message}", e)
           }
