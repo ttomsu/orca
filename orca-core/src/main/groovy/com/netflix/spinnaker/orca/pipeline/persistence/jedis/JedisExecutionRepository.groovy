@@ -291,6 +291,11 @@ class JedisExecutionRepository implements ExecutionRepository {
     try {
       T item = retrieveInternal(jedis, type, id)
       jedis.srem(executionsByAppKey(type, item.application), id)
+      if (item instanceof Pipeline) {
+        ((Pipeline) item).with {
+          jedis.zrem(executionsByPipelineKey(pipelineConfigId))
+        }
+      }
 
       item.stages.each { Stage stage ->
         def stageKey = "${type.simpleName.toLowerCase()}:stage:${stage.id}"
