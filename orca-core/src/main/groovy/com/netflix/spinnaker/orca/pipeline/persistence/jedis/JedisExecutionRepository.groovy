@@ -150,22 +150,28 @@ class JedisExecutionRepository implements ExecutionRepository {
   }
 
   private Observable<Pipeline> queryPipelinesByConfigId(String pipelineConfigId, Set<ExecutionStatus> filter, Optional<Integer> max) {
-    def executionIds = withJedis { Jedis jedis ->
-      jedis.zrevrange(executionsByPipelineKey(pipelineConfigId), 0, Long.MAX_VALUE)
-    }
-    def stream = from(executionIds)
-      .flatMap({ String executionId ->
+    Observable<Pipeline> stream = just(pipelineConfigId)
+      .flatMapIterable({ String _pipelineConfigId ->
       withJedis { Jedis jedis ->
-        try {
-          just(retrieveInternal(jedis, Pipeline, executionId))
-        } catch (ExecutionNotFoundException e) {
-          empty()
-        }
+        jedis.zrevrange(executionsByPipelineKey(_pipelineConfigId), 0, Long.MAX_VALUE)
       }
-               } as Func1<String, Observable<Pipeline>>)
-      .filter({ Pipeline pipeline ->
-      filter.isEmpty() || pipeline.status in filter
-              } as Func1<Pipeline, Boolean>)
+                       } as Func1<String, Iterable<String>>)
+      .buffer(max.orElse(5))
+      .flatMap({ Iterable<String> ids ->
+      from(ids)
+        .flatMap({ String executionId ->
+        withJedis { Jedis jedis ->
+          try {
+            just(retrieveInternal(jedis, Pipeline, executionId))
+          } catch (ExecutionNotFoundException e) {
+            empty()
+          }
+        }
+                 } as Func1<String, Observable<Pipeline>>)
+        .filter({ Pipeline pipeline ->
+        filter.isEmpty() || pipeline.status in filter
+                } as Func1<Pipeline, Boolean>)
+               } as Func1<Iterable<String>, Observable<Pipeline>>)
 
     return max.isPresent() ? stream.take(max.get()) : stream
   }
