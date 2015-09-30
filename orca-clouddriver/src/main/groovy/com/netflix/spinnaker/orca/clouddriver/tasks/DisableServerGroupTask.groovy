@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 Netflix, Inc.
+ * Copyright 2015 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,15 +14,13 @@
  * limitations under the License.
  */
 
-package com.netflix.spinnaker.orca.kato.tasks
+package com.netflix.spinnaker.orca.clouddriver.tasks
 
-import groovy.transform.CompileStatic
-import com.netflix.spinnaker.orca.kato.pipeline.DisableAsgStage
-import org.springframework.stereotype.Component
+import com.netflix.spinnaker.orca.clouddriver.pipeline.DisableServerGroupStage
 
-@Component
-@CompileStatic
-@Deprecated
-class DisableAsgTask extends AbstractAsgTask {
-  String asgAction = DisableAsgStage.PIPELINE_CONFIG_TYPE
+/**
+ * @author sthadeshwar
+ */
+class DisableServerGroupTask extends AbstractServerGroupTask {
+  String serverGroupAction = DisableServerGroupStage.PIPELINE_CONFIG_TYPE
 }

@@ -58,6 +58,10 @@ class StageData {
     region ?: availabilityZones.keySet().toList().get(0)
   }
 
+  int getMaxRemainingServerGroups() {
+    maxRemainingAsgs
+  }
+
   static class Source {
     String account
     String region

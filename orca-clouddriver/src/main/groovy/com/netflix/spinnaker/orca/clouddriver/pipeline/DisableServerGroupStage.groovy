@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 Netflix, Inc.
+ * Copyright 2015 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,36 +14,32 @@
  * limitations under the License.
  */
 
-package com.netflix.spinnaker.orca.kato.pipeline
-
+package com.netflix.spinnaker.orca.clouddriver.pipeline
+import com.netflix.spinnaker.orca.clouddriver.tasks.DisableServerGroupTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.MonitorKatoTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.ServerGroupCacheForceRefreshTask
-import com.netflix.spinnaker.orca.kato.pipeline.support.TargetReferenceLinearStageSupport
-import com.netflix.spinnaker.orca.kato.tasks.*
+import com.netflix.spinnaker.orca.kato.pipeline.support.TargetServerGroupLinearStageSupport
+import com.netflix.spinnaker.orca.kato.tasks.WaitForAllInstancesDownTask
 import com.netflix.spinnaker.orca.pipeline.model.Stage
-import groovy.transform.CompileStatic
 import org.springframework.batch.core.Step
-import org.springframework.stereotype.Component
+/**
+ * @author sthadeshwar
+ */
+class DisableServerGroupStage  extends TargetServerGroupLinearStageSupport {
+  static final String PIPELINE_CONFIG_TYPE = "disableServerGroup"
 
-@Component
-@CompileStatic
-@Deprecated
-class DisableAsgStage extends TargetReferenceLinearStageSupport {
-  static final String PIPELINE_CONFIG_TYPE = "disableAsg"
-
-  DisableAsgStage() {
+  DisableServerGroupStage() {
     super(PIPELINE_CONFIG_TYPE)
   }
 
   @Override
   public List<Step> buildSteps(Stage stage) {
     composeTargets(stage)
-
-    def step1 = buildStep(stage, "disableAsg", DisableAsgTask)
-    def step2 = buildStep(stage, "monitorAsg", MonitorKatoTask)
-    def step3 = buildStep(stage, "waitForDownInstances", WaitForAllInstancesDownTask)
-    def step4 = buildStep(stage, "forceCacheRefresh", ServerGroupCacheForceRefreshTask)
-    [step1, step2, step3, step4]
+    [
+      buildStep(stage, "disableAsg", DisableServerGroupTask),
+      buildStep(stage, "monitorServerGroup", MonitorKatoTask),
+      buildStep(stage, "forceCacheRefresh", ServerGroupCacheForceRefreshTask),
+      buildStep(stage, "waitForDownInstances", WaitForAllInstancesDownTask),
+    ]
   }
-
 }

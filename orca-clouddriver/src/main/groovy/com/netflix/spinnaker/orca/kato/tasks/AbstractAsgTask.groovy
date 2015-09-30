@@ -28,6 +28,7 @@ import com.netflix.spinnaker.orca.clouddriver.KatoService
 import org.springframework.beans.factory.annotation.Autowired
 
 @CompileStatic
+@Deprecated
 abstract class AbstractAsgTask implements Task {
 
   @Autowired
