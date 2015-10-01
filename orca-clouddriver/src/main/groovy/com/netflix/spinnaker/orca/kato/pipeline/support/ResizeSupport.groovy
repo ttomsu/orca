@@ -37,23 +37,26 @@ class ResizeSupport {
 
     for (TargetReference target : targetReferences) {
       def region = target.region
-      def asg = target.asg
-      if (!asg && targetReferenceSupport.isDynamicallyBound(stage)) {
-        log.info("Skipping target reference because the stage is not dynamic and there is no ASG defined")
+      def serverGroup = target.asg
+      if (!serverGroup && targetReferenceSupport.isDynamicallyBound(stage)) {
+        log.info("Skipping target reference because the stage is not dynamic and there is no ServerGroup defined")
         continue
       }
 
       def description = new HashMap(stage.context)
-      if (descriptions.containsKey(asg.name)) {
-        descriptions[asg.name as String].regions.add(region)
+      if (descriptions.containsKey(serverGroup.name)) {
+        descriptions[serverGroup.name as String].regions.add(region)
         continue
       }
-      description.asgName = asg.name
-      description.regions = [asg.region]
 
-      def currentMin = Integer.parseInt(asg.asg.minSize.toString())
-      def currentDesired = Integer.parseInt(asg.asg.desiredCapacity.toString())
-      def currentMax = Integer.parseInt(asg.asg.maxSize.toString())
+      description.asgName = serverGroup.name      // TODO: Retire asgName
+      description.regions = [serverGroup.region]  // TODO: Retire regions
+      description.serverGroupName = serverGroup.name
+      description.region = serverGroup.region
+
+      def currentMin = Integer.parseInt(serverGroup.capacity.min.toString())
+      def currentDesired = Integer.parseInt(serverGroup.capacity.desired.toString())
+      def currentMax = Integer.parseInt(serverGroup.capacity.max.toString())
 
       Integer newMin, newDesired, newMax
       if (optionalConfig.scalePct) {
@@ -89,7 +92,7 @@ class ResizeSupport {
         description.capacity = mergeConfiguredCapacityWithCurrent(capacity, currentMin, currentDesired, currentMax)
       }
 
-      descriptions[asg.name as String] = description
+      descriptions[serverGroup.name as String] = description
     }
     descriptions.values().flatten()
   }
@@ -109,8 +112,11 @@ class ResizeSupport {
         operations[serverGroup.name as String].regions.add(location)
         continue
       }
-      operation.asgName = serverGroup.name
-      operation.regions = [serverGroup.region]
+
+      operation.asgName = serverGroup.name      // TODO: Retire asgName
+      operation.regions = [serverGroup.region]  // TODO: Retire regions
+      operation.serverGroupName = serverGroup.name
+      operation.region = serverGroup.region
 
       def currentMin = Integer.parseInt(serverGroup.capacity.min.toString())
       def currentDesired = Integer.parseInt(serverGroup.capacity.desired.toString())
@@ -191,7 +197,7 @@ class ResizeSupport {
     // TODO(ttomsu): Make clouddriver op support specifying multiple zones.
     description.zone = tsg.location
     description.numReplicas = description.capacity.desired
-    description.replicaPoolName = description.asgName
+    description.replicaPoolName = description.serverGroupName
   }
 
   static enum ResizeAction {

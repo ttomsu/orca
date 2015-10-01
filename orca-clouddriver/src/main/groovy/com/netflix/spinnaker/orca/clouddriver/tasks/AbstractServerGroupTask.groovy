@@ -18,6 +18,7 @@ package com.netflix.spinnaker.orca.clouddriver.tasks
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.spinnaker.orca.DefaultTaskResult
 import com.netflix.spinnaker.orca.ExecutionStatus
+import com.netflix.spinnaker.orca.Task
 import com.netflix.spinnaker.orca.TaskResult
 import com.netflix.spinnaker.orca.clouddriver.KatoService
 import com.netflix.spinnaker.orca.clouddriver.model.TaskId
@@ -25,10 +26,11 @@ import com.netflix.spinnaker.orca.kato.pipeline.support.TargetServerGroup
 import com.netflix.spinnaker.orca.kato.pipeline.support.TargetServerGroupResolver
 import com.netflix.spinnaker.orca.pipeline.model.Stage
 import org.springframework.beans.factory.annotation.Autowired
+
 /**
  * @author sthadeshwar
  */
-abstract class AbstractServerGroupTask extends AbstractCloudProviderAwareTask {
+abstract class AbstractServerGroupTask extends AbstractCloudProviderAwareTask implements Task {
 
   @Autowired
   KatoService kato

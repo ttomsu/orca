@@ -21,6 +21,7 @@ import com.netflix.spinnaker.orca.ExecutionStatus
 import com.netflix.spinnaker.orca.Task
 import com.netflix.spinnaker.orca.TaskResult
 import com.netflix.spinnaker.orca.clouddriver.KatoService
+import com.netflix.spinnaker.orca.clouddriver.model.TaskId
 import com.netflix.spinnaker.orca.clouddriver.tasks.AbstractCloudProviderAwareTask
 import com.netflix.spinnaker.orca.kato.pipeline.support.ResizeSupport
 import com.netflix.spinnaker.orca.kato.pipeline.support.TargetServerGroup
@@ -41,20 +42,16 @@ class ResizeServerGroupTask extends AbstractCloudProviderAwareTask implements Ta
   TaskResult execute(Stage stage) {
     String cloudProvider = getCloudProvider(stage)
     String account = getCredentials(stage)
-
-    def operation = convert(stage)
-    def taskId = kato.requestOperations(cloudProvider, [[resizeServerGroup: operation]])
-                     .toBlocking()
-                     .first()
+    Map operation = convert(stage)
+    TaskId taskId = kato.requestOperations(cloudProvider, [[resizeServerGroup: operation]]).toBlocking().first()
     new DefaultTaskResult(ExecutionStatus.SUCCEEDED, [
-      "notification.type"   : "resizeasg", // TODO(someone on NFLX side): Rename to 'resizeservergroup'?
-      "deploy.account.name" : account,
-      "kato.last.task.id"   : taskId,
-      "asgName"             : operation.asgName,
-      "capacity"            : operation.capacity,
-      "deploy.server.groups": operation.regions.collectEntries {
-        [(it): [operation.asgName]]
-      }
+      "notification.type"     : "resizeasg", // TODO(someone on NFLX side): Rename to 'resizeservergroup'?
+      "deploy.account.name"   : account,
+      "kato.last.task.id"     : taskId,
+      "serverGroupName"       : operation.serverGroupName,
+      "asgName"               : operation.serverGroupName,  // TODO: Retire asgName
+      "capacity"              : operation.capacity,
+      "deploy.server.groups"  : operation.regions.collectEntries { [(it): [operation.asgName]] }
     ])
   }
 
@@ -62,10 +59,12 @@ class ResizeServerGroupTask extends AbstractCloudProviderAwareTask implements Ta
     if (TargetServerGroup.isDynamicallyBound(stage)) {
       List<TargetServerGroup> tsgs = TargetServerGroupResolver.fromPreviousStage(stage)
       def descriptors = ResizeSupport.createResizeDescriptors(stage, tsgs)
-      return descriptors?.get(0)
+      return descriptors.get(0)
+    } else {
+      Map context = new HashMap(stage.context)
+      context.serverGroupName = (context.serverGroupName ?: context.asgName) as String
+      // Statically bound resize operations put the descriptor as the context.
+      return context
     }
-
-    // Statically bound resize operations put the descriptor as the context.
-    return stage.context
   }
 }

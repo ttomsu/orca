@@ -36,7 +36,7 @@ class DisableServerGroupStage  extends TargetServerGroupLinearStageSupport {
   public List<Step> buildSteps(Stage stage) {
     composeTargets(stage)
     [
-      buildStep(stage, "disableAsg", DisableServerGroupTask),
+      buildStep(stage, "disableServerGroup", DisableServerGroupTask),
       buildStep(stage, "monitorServerGroup", MonitorKatoTask),
       buildStep(stage, "forceCacheRefresh", ServerGroupCacheForceRefreshTask),
       buildStep(stage, "waitForDownInstances", WaitForAllInstancesDownTask),
