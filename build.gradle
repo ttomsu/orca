@@ -79,6 +79,9 @@ subprojects {
     compile spinnaker.dependency('guava')
     compile spinnaker.dependency('slf4jApi')
     testRuntime spinnaker.dependency('slf4jSimple')
+    compile 'org.springframework.data:spring-data-rest-webmvc:2.4.2.RELEASE'
+    compile "org.springframework.boot:spring-boot-starter-data-jpa:1.2.5.RELEASE"
+    compile "com.h2database:h2"
   }
 }
 
