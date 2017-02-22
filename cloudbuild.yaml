@@ -1,6 +1,6 @@
 steps:
-- name: 'gcr.io/cloud-builders/git'
-  args: ['fetch', '--unshallow']
+#- name: 'gcr.io/cloud-builders/git'
+#  args: ['fetch', '--unshallow', '--tags']
 - name: 'java:8'
   env: ["GRADLE_USER_HOME=cache"]
   entrypoint: "bash"
